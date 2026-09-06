@@ -44,6 +44,7 @@
   - [Set default node version](#set-default-node-version)
   - [Use a mirror of node binaries](#use-a-mirror-of-node-binaries)
     - [Pass Authorization header to mirror](#pass-authorization-header-to-mirror)
+    - [Pass a Proxy-Authorization header to a proxy](#pass-a-proxy-authorization-header-to-a-proxy)
   - [.nvmrc](#nvmrc)
   - [Deeper Shell Integration](#deeper-shell-integration)
     - [Calling `nvm use` automatically in a directory with a `.nvmrc` file](#calling-nvm-use-automatically-in-a-directory-with-a-nvmrc-file)
