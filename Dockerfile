@@ -91,8 +91,8 @@ RUN chown ${NON_ROOT_USER}:${NON_ROOT_USER} -R "/home/${NON_ROOT_USER}/.nvm"
 # Set sudoer for "nvm"
 RUN echo "${NON_ROOT_USER} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
-# Switch to user "nvm" from now
-USER "${NON_ROOT_USER}"
+# Switch to the non-root user from now
+USER ${NON_ROOT_USER}
 
 # Create a script file sourced by both interactive and non-interactive bash shells
 ENV BASH_ENV="/home/${NON_ROOT_USER}/.bash_env"
@@ -140,10 +140,10 @@ ARG NON_ROOT_USER="nvm"
 ENV BASH_ENV="/home/${NON_ROOT_USER}/.bash_env"
 
 # Set the user again here since it gets reset when going to new stages.
-USER "${NON_ROOT_USER}"
+USER ${NON_ROOT_USER}
 
 # Set WORKDIR to nvm directory. This needs to be here so it is set for the final image build.
-WORKDIR "/home/${NON_ROOT_USER}/.nvm"
+WORKDIR /home/${NON_ROOT_USER}/.nvm
 
 # The entrypoint also needs to be set in final build stage. tini is used as
 # the init process (PID 1) so that signals are forwarded to the child process
