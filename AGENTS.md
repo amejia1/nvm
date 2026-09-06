@@ -239,6 +239,72 @@ npm run markdown-link-check  # Validates markdown links (requires markdown-link-
 - Place mocks in `test/mocks/` directory
 - Mock files should only be updated by the existing `update_test_mocks.sh` script, and any new mocks must be added to this script
 
+## Docker Development Container
+
+A development container image (`nvm-dev`) packages the current `nvm` working copy into an Ubuntu-based environment prepared with the tools needed to develop and test `nvm`. It is the recommended environment for running the test suite: it provides a clean shell environment with all supported shells (bash, zsh, dash, ksh) and a working pty. The test suite can be run inside the container, but not all tests currently pass there (as of this commit, a full run reports 215 passed and 8 failed); the container's purpose is to be able to run the suite, and the remaining failures are tracked separately.
+
+### Building the container
+
+Run from the root of the `nvm` repository:
+
+```bash
+./build-dev-container.sh
+```
+
+This builds the `nvm-dev` image with the current user's username, uid, and gid as the non-root user inside the container. Building with the host user's identity is important: it allows the host's `nvm` source directory to be mounted into the container and for files to be copied to and from it with matching ownership. The build takes several minutes and the image is not suitable for production usage.
+
+To build a container with the default `nvm` username, uid, and gid (1001) instead, run:
+
+```bash
+docker build --tag nvm-dev .
+```
+
+### Running the container
+
+Run from the root of the `nvm` repository:
+
+```bash
+./run-dev-container.sh
+```
+
+This starts an interactive container that mounts the host's `nvm` top-level directory into `${HOME}/nvm` inside the container and leaves the working directory at `${HOME}/.nvm`, where the packaged copy of the repository (including its `node_modules` and node installation) lives. To test changes made on the host, copy the changed files from `${HOME}/nvm` into `${HOME}/.nvm` inside the container, then run the tests from `${HOME}/.nvm`.
+
+The equivalent direct command is:
+
+```bash
+docker run --rm --name nvm-dev -it --volume "$(pwd):/home/$(whoami)/nvm:rw" nvm-dev
+```
+
+The `--rm` flag removes the container on exit and the `--name nvm-dev` flag means only one such container can run at a time.
+
+### Running the test suite
+
+Inside the container (from `${HOME}/.nvm`):
+
+```bash
+npm run test
+```
+
+Note that running the test suite typically removes the node installation, so if you need to rerun the tests, exit the container and then run the container again.
+
+### Running commands non-interactively
+
+Commands can be run in a non-interactive way by first writing them into a separate shell script file and then executing it inside the container. The image's entrypoint is `/bin/bash -i` and its default user is the one it was built with, so the invocation must clear the entrypoint (`--entrypoint=''`) and run the script through an interactive bash. Example, from the host:
+
+```bash
+printf '#!/bin/sh\nnpm run test/fast\n' >/tmp/test.sh
+container_user="$(docker image inspect --format '{{.Config.User}}' nvm-dev)"
+docker run --rm --name nvm-dev -it --volume "/tmp/test.sh:/home/${container_user}/.nvm/test.sh" --entrypoint='' nvm-dev /bin/bash -i "/home/${container_user}/.nvm/test.sh"
+```
+
+The repository already ships `run-tests-in-container.sh`, a ready-made script that runs all tests non-interactively from within the container; see the comments in that script for example commands. It can be run with:
+
+```bash
+./run-dev-container.sh "/home/$(whoami)/.nvm/run-tests-in-container.sh"
+```
+
+When writing scripts to run inside the development container, do not use the `exec` directive: due to the way the container is built, using `exec` is not expected to work.
+
 ## Shell Environment Setup
 
 ### Supported Shells
