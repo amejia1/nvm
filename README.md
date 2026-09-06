@@ -661,7 +661,10 @@ routed through (for example via `http_proxy` or `https_proxy`), set
 `$NVM_PROXY_AUTH_HEADER`
 
 ```sh
-NVM_PROXY_AUTH_HEADER="Basic dXNlcjpwYXNzd29yZA==" nvm install node
+export http_proxy="http://proxy.example.com:3128"
+export https_proxy="http://proxy.example.com:3128"
+export NVM_PROXY_AUTH_HEADER="Basic dXNlcjpwYXNzd29yZA=="
+nvm install node
 ```
 
 ### .nvmrc
