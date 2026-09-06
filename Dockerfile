@@ -3,7 +3,7 @@
 # This Dockerfile is for building nvm development environment only,
 # not for any distribution/production usage.
 #
-# Please note that it'll use about 1.2 GB disk space and about 15 minutes to
+# Please note that it'll use about 1.7 GB disk space and about 15 minutes to
 # build this image, it depends on your hardware.
 
 ARG UBUNTU_VERSION="26.04"
@@ -50,6 +50,7 @@ RUN apt update         && \
         dstat                 \
         vim                   \
         tmux                  \
+        tini                  \
         curl                  \
         git                   \
         jq                    \
@@ -108,6 +109,28 @@ RUN nvm install node
 RUN npm install -g doctoc urchin eclint dockerfile_lint replace semver
 RUN npm install --prefix "$HOME/.nvm/"
 
+# Remove the "which" CLI shim from node_modules/.bin: the test suite runs with
+# node_modules/.bin first on the PATH, and the npm "which" package (a node
+# script) fails whenever node itself is not on the PATH (for example right
+# after an "nvm deactivate" inside a test), which breaks nvm's own "command
+# which ..." lookups. This image ships a real /usr/bin/which, which is what
+# the tests expect.
+RUN rm -f "$HOME/.nvm/node_modules/.bin/which"
+
+# Point the git "origin" remote at the upstream nvm repository over https: the working copy (including its
+# ".git" directory) is copied into the image, and its origin may be a fork over ssh, in which case the tests
+# that update the repository with git (like the "install_script" tests, which run "install.sh") hang waiting
+# for an ssh authentication or host-key prompt. The CI checks out the repository with an https origin.
+RUN git -C "$HOME/.nvm" remote set-url origin https://github.com/nvm-sh/nvm.git
+
+# Check out the nvmrc test fixtures git submodule. The URL is pinned to
+# nvm-sh/nvmrc explicitly, since the relative submodule URL ("../nvmrc.git")
+# resolves against the superproject's origin, which may be a fork that does
+# not host the nvmrc repository.
+RUN git -C "$HOME/.nvm" config submodule.test/fixtures/nvmrc.url https://github.com/nvm-sh/nvmrc.git && \
+    git -C "$HOME/.nvm" submodule update --init test/fixtures/nvmrc && \
+    git -C "$HOME/.nvm" config --unset submodule.test/fixtures/nvmrc.url
+
 # Create a new layer to squash down the "build" stage layers to a single layer.
 FROM scratch
 COPY --from=build / /
@@ -122,5 +145,12 @@ USER "${NON_ROOT_USER}"
 # Set WORKDIR to nvm directory. This needs to be here so it is set for the final image build.
 WORKDIR "/home/${NON_ROOT_USER}/.nvm"
 
-# The entrypoint also needs to be set in final build stage.
-ENTRYPOINT ["/bin/bash", "-i"]
+# The entrypoint also needs to be set in final build stage. tini is used as
+# the init process (PID 1) so that signals are forwarded to the child process
+# and orphaned processes are reaped. This also lets container commands be run
+# directly ("docker run nvm-dev /path/to/script"), and lets "exec" be used in
+# scripts run inside the container.
+ENTRYPOINT ["tini", "--"]
+
+# The default command is an interactive bash shell, sourced with nvm loaded.
+CMD ["/bin/bash", "-i"]

@@ -8,6 +8,15 @@ set +e # TODO: fix
 \. ../../nvm.sh
 set -e
 
+# Building this node version requires python 2 (its `configure` is python 2 and
+# is invoked through `#!/usr/bin/env python`); CI has it, but many modern
+# systems do not, so skip instead of failing (the binary-install tests cover
+# nvm's install pipeline everywhere).
+if ! python -V 2>&1 | command grep -q '^Python 2'; then
+  echo 'python 2 is not available; skipping the node source install'
+  exit 0
+fi
+
 nvm deactivate || die 'deactivate failed'
 
 nvm unalias default || die 'unable to unalias default'

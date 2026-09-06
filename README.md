@@ -1033,7 +1033,7 @@ This will package your current nvm working copy with our pre-defined development
 $ docker images
 
 REPOSITORY         TAG                 IMAGE ID            CREATED             SIZE
-nvm-dev            latest              9ca4c57a97d8        7 days ago          650 MB
+nvm-dev            latest              41146f2c66b3        1 minute ago        1.76 GB
 ```
 
 To start and enter a container based on this image:
@@ -1042,7 +1042,7 @@ To start and enter a container based on this image:
 $ docker run --rm --name nvm-dev -it nvm-dev
 ```
 
-It takes several minutes to build the image and the image size is about 650MB, so it's not suitable for production usage.
+It takes several minutes to build the image and the image size is about 1.7GB, so it's not suitable for production usage.
 
 If you built the container using the `build-dev-container.sh` script, there is no need to rebuild the container to include your
 changes in the `nvm` package. Instead, utilize the `--volume` option to mount the top-level `nvm` source directory into the
@@ -1058,11 +1058,21 @@ Or you can run the `docker run` command directly.
 docker run --rm --name nvm-dev -it --volume "$(pwd):/home/$(whoami)/nvm:rw" nvm-dev
 ```
 
-Once inside the container, you can do things like run the entire test suite.
+Once inside the container, you can do things like run a test suite.
 
 ```sh
-npm run test
+npm run test/fast
 ```
+
+There is also a "run-tests-in-container.sh" script to run all test suites non-interactively from within the container. See the comments in that
+script for example commands to use that script to run the tests. It runs the six real test suites ("fast", "slow", "sourcing",
+"installation_node", "installation_iojs", and "install_script" — in that order, with "install_script" last because some of its tests
+update the packaged repository with git) in bash; the "test/fixtures" and "test/mocks" directories are not test suites and are not ran.
+The tests download a lot of files, and an occasional download can hang, so each suite is given a timeout (600 seconds by default, as in the CI),
+and a timed-out suite is stopped (including the hung download) and retried, up to 3 attempts. Some tests build old node and io.js versions
+from source, which requires a python 2 (and, for io.js, a gcc ≤ 5) toolchain that a modern system (including this container) typically
+does not have; those tests detect the missing toolchain and skip (exit 0) instead of failing, while the binary-install and "fake source"
+tests cover nvm's source-install pipeline on every toolchain.
 
 Note that running the test suite will typically remove the node installation, so if you need to rerun the tests, simply exit the container and then run the container again.
 
@@ -1072,11 +1082,20 @@ an example script on how this can be done.
 ```sh
 printf '#!/bin/sh\nnpm run test/fast\n' >/tmp/test.sh
 container_user="$(docker image inspect --format '{{.Config.User}}' nvm-dev)"
-docker run --rm --name nvm-dev -it --volume "/tmp/test.sh:/home/${container_user}/.nvm/test.sh" --entrypoint='' nvm-dev /bin/bash -i "/home/${container_user}/.nvm/test.sh"
+docker run --rm --name nvm-dev -it --volume "/tmp/test.sh:/home/${container_user}/.nvm/test.sh" nvm-dev /bin/bash -i "/home/${container_user}/.nvm/test.sh"
 ```
 
-There is already a "run-tests-in-container.sh" script to run all tests non-interactively from within the container. See the comments in that
-script for example commands to use that script to run the tests.
+The image uses tini as its init process, so a mounted script can also be executed directly as a container command. A script that is executed directly runs in the shell of its shebang line: a `#!/bin/bash` script loads nvm through `BASH_ENV`, while a `#!/bin/sh` (dash) script does not (dash ignores `BASH_ENV`), so such scripts must either source nvm themselves or run commands that do not need node. Also note that commands like `npm run test/fast` detect the shell to test in from their parent process: for example, the `run-tests-in-container.sh` script mentioned above is a good fit to be executed directly, since it runs the test suites in bash explicitly.
+
+If you capture the output of a container run to a log file, write the log to `"$HOME/workspace/scratch_space"` (not to `/tmp`), and mount that directory into the container at the same location so that logs can also be written from inside the container. Delete such log files once they are no longer needed, so they do not fill the disk.
+
+```sh
+mkdir -p "$HOME/workspace/scratch_space"
+docker run --rm --name nvm-dev \
+  --volume "$HOME/workspace/scratch_space":"/home/$(whoami)/workspace/scratch_space" \
+  nvm-dev "/home/$(whoami)/.nvm/run-tests-in-container.sh" \
+  > "$HOME/workspace/scratch_space/nvm-test-run.log" 2>&1
+```
 
 For more information and documentation about Docker, please refer to its [official website][docker-www] and [documentation][docker-docs]:
 
