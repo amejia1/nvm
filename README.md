@@ -1006,10 +1006,16 @@ export NVM_DIR="$HOME/.nvm"
 
 ## Docker For Development Environment
 
-To make development and testing work easier we supply a Dockerfile for development usage. It's based on an Ubuntu base image prepared with essential and useful tools for `nvm` development. To build the docker image of the environment, do a Docker build at the root of `nvm` repository:
+To make development and testing work easier we supply a Dockerfile for development usage. It's based on an Ubuntu base image prepared with essential and useful tools for `nvm` development. To build the docker image of the environment, run the `build-dev-container.sh` script at the root of `nvm` repository:
 
 ```sh
-$ docker build -t nvm-dev .
+$ ./build-dev-container.sh
+```
+
+Or if you rather have a container using the default `nvm` username, uid, and gid, run the `docker build` command as follows.
+
+```sh
+$ docker build --tag nvm-dev .
 ```
 
 This will package your current nvm working copy with our pre-defined development environment into a Docker image named `nvm-dev`. After the build you should see it appear in the list of images:
@@ -1024,12 +1030,44 @@ nvm-dev            latest              9ca4c57a97d8        7 days ago          6
 To start and enter a container based on this image:
 
 ```sh
-$ docker run -h nvm-dev -it nvm-dev
-
-nvm@nvm-dev:~/.nvm$
+$ docker run --rm --name nvm-dev -it nvm-dev
 ```
 
 It takes several minutes to build the image and the image size is about 650MB, so it's not suitable for production usage.
+
+If you built the container using the `build-dev-container.sh` script, there is no need to rebuild the container to include your
+changes in the `nvm` package. Instead, utilize the `--volume` option to mount the top-level `nvm` source directory into the
+appropriate location inside of your container. Run the following command.
+
+```sh
+./run-dev-container.sh
+```
+
+Or you can run the `docker run` command directly.
+
+```sh
+docker run --rm --name nvm-dev -it --volume "$(pwd):/home/$(whoami)/nvm:rw" nvm-dev
+```
+
+Once inside the container, you can do things like run the entire test suite.
+
+```sh
+npm run test
+```
+
+Note that running the test suite will typically remove the node installation, so if you need to rerun the tests, simply exit the container and then run the container again.
+
+Commands can be ran in a non-interactive way by first writing them into a separate shell script file and then executing. Here is
+an example script on how this can be done.
+
+```sh
+printf '#!/bin/sh\nnpm run test/fast\n' >/tmp/test.sh
+container_user="$(docker image inspect --format '{{.Config.User}}' nvm-dev)"
+docker run --rm --name nvm-dev -it --volume "/tmp/test.sh:/home/${container_user}/.nvm/test.sh" --entrypoint='' nvm-dev /bin/bash -i "/home/${container_user}/.nvm/test.sh"
+```
+
+There is already a "run-tests-in-container.sh" script to run all tests non-interactively from within the container. See the comments in that
+script for example commands to use that script to run the tests.
 
 For more information and documentation about Docker, please refer to its [official website][docker-www] and [documentation][docker-docs]:
 
