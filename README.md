@@ -655,6 +655,15 @@ To pass an Authorization header through to the mirror url, set `$NVM_AUTH_HEADER
 NVM_AUTH_HEADER="Bearer secret-token" nvm install node
 ```
 
+#### Pass a Proxy-Authorization header to a proxy
+To pass a Proxy-Authorization header through to a proxy that the downloads are
+routed through (for example via `http_proxy` or `https_proxy`), set
+`$NVM_PROXY_AUTH_HEADER`
+
+```sh
+NVM_PROXY_AUTH_HEADER="Basic dXNlcjpwYXNzd29yZA==" nvm install node
+```
+
 ### .nvmrc
 
 You can create a `.nvmrc` file containing a node version number (or any other string that `nvm` understands; see `nvm --help` for details) in the project root directory (or any parent directory).
