@@ -12,6 +12,9 @@ trim_trailing_whitespace = true
 [*.txt]
 indent_size = false
 
+[dockerfile_lint_rules.yaml]
+indent_size = false
+
 [test/fast/Listing versions/Running 'nvm ls' calls into nvm_alias]
 indent_size = false
 

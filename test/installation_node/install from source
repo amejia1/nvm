@@ -8,11 +8,22 @@ set +e # TODO: fix
 \. ../../nvm.sh
 set -e
 
+# CI (Ubuntu 16.04) builds v0.10.7, whose configure requires python 2. Modern
+# systems do not have python 2, so build the current node release instead, which
+# builds with python 3 and a modern C/C++ toolchain.
+if python -V 2>&1 | command grep -q '^Python 2'; then
+  NVM_TEST_VERSION=v0.10.7
+else
+  NVM_TEST_VERSION=v26.8.1
+fi
+
 nvm deactivate || die 'deactivate failed'
 
 nvm unalias default || die 'unable to unalias default'
 
-NVM_TEST_VERSION=v0.10.7
+# Versions below 0.12.0 are installed directly under NVM_DIR (like "v0.10.7"),
+# newer ones under "versions/node"; use nvm_version_path so both are handled.
+NVM_TEST_VERSION_PATH="$(nvm_version_path "${NVM_TEST_VERSION}")"
 
 # Remove the stuff we're clobbering.
 nvm uninstall "${NVM_TEST_VERSION}" || die 'nvm uninstall failed'
@@ -21,7 +32,7 @@ nvm uninstall "${NVM_TEST_VERSION}" || die 'nvm uninstall failed'
 nvm install -s "${NVM_TEST_VERSION}" || die "'nvm install -s ${NVM_TEST_VERSION}' failed"
 
 # Check
-[ -d ../../$NVM_TEST_VERSION ] || die "../../${NVM_TEST_VERSION} is not a directory"
+[ -d "${NVM_TEST_VERSION_PATH}" ] || die "${NVM_TEST_VERSION_PATH} is not a directory"
 nvm run $NVM_TEST_VERSION --version | grep $NVM_TEST_VERSION || "'nvm run ${NVM_TEST_VERSION} --version | grep ${NVM_TEST_VERSION}' failed"
 
 # ensure default is set

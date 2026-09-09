@@ -4,30 +4,110 @@ die () { echo "$@" ; exit 1; }
 
 \. ../../nvm.sh
 
-NVM_TEST_VERSION=v0.10.7
+# CI (Ubuntu 16.04) builds v0.10.7, whose configure requires python 2. Modern
+# systems do not have python 2, so build the current node release instead, which
+# builds with python 3 and a modern C/C++ toolchain.
+if python -V 2>&1 | command grep -q '^Python 2'; then
+  NVM_TEST_VERSION=v0.10.7
+else
+  NVM_TEST_VERSION=v26.8.1
+fi
 
-# STAGE 1 #
+# Versions below 0.12.0 are installed directly under NVM_DIR (like "v0.10.7"),
+# newer ones under "versions/node"; use nvm_version_path so both are handled.
+NVM_TEST_VERSION_PATH="$(nvm_version_path "${NVM_TEST_VERSION}")"
 
-# Remove the stuff we're clobbering.
-[ -e ../../$NVM_TEST_VERSION ] && rm -R ../../$NVM_TEST_VERSION
+if [ "${NVM_TEST_VERSION}" = v0.10.7 ]; then
+  # v0.10.7 is small enough to build to completion with 1-2 make jobs.
 
-# Install from source with 1 make job
-nvm install -s -j 1 $NVM_TEST_VERSION || die "'nvm install -s $NVM_TEST_VERSION' failed"
+  # STAGE 1 #
 
-# Check
-[ -d ../../$NVM_TEST_VERSION ]
-nvm run $NVM_TEST_VERSION --version | grep $NVM_TEST_VERSION || "'nvm run $NVM_TEST_VERSION --version | grep $NVM_TEST_VERSION' failed"
+  # Remove the stuff we're clobbering.
+  [ -e "${NVM_TEST_VERSION_PATH}" ] && rm -R "${NVM_TEST_VERSION_PATH}"
 
+  # Install from source with 1 make job
+  nvm install -s -j 1 $NVM_TEST_VERSION || die "'nvm install -s -j 1 $NVM_TEST_VERSION' failed"
 
+  # Check
+  [ -d "${NVM_TEST_VERSION_PATH}" ] || die "${NVM_TEST_VERSION_PATH} is not a directory"
+  nvm run $NVM_TEST_VERSION --version | command grep $NVM_TEST_VERSION || "'nvm run ${NVM_TEST_VERSION} --version | grep ${NVM_TEST_VERSION}' failed"
 
-# STAGE 2 #
+  # STAGE 2 #
 
-# Remove the stuff we're clobbering.
-[ -e ../../$NVM_TEST_VERSION ] && rm -R ../../$NVM_TEST_VERSION
+  # Remove the stuff we're clobbering.
+  [ -e "${NVM_TEST_VERSION_PATH}" ] && rm -R "${NVM_TEST_VERSION_PATH}"
 
-# Install from source with 2 make jobs (and swapped arg order)
-nvm install -j 2 -s $NVM_TEST_VERSION || die "'nvm install -s $NVM_TEST_VERSION' failed"
+  # Install from source with 2 make jobs (and swapped arg order)
+  nvm install -j 2 -s $NVM_TEST_VERSION || die "'nvm install -j 2 -s $NVM_TEST_VERSION' failed"
 
-# Check
-[ -d ../../$NVM_TEST_VERSION ]
-nvm run $NVM_TEST_VERSION --version | grep $NVM_TEST_VERSION || "'nvm run $NVM_TEST_VERSION --version | grep $NVM_TEST_VERSION' failed"
+  # Check
+  [ -d "${NVM_TEST_VERSION_PATH}" ] || die "${NVM_TEST_VERSION_PATH} is not a directory"
+  nvm run $NVM_TEST_VERSION --version | command grep $NVM_TEST_VERSION || "'nvm run ${NVM_TEST_VERSION} --version | grep ${NVM_TEST_VERSION}' failed"
+else
+  # Building a modern node release with 1-2 make jobs takes hours, so do not
+  # run the build to completion (the plain-build path is covered by
+  # 'install from source'): start the build, verify that make actually runs
+  # with the requested job count, then abort it. Requires setsid and ps.
+
+  NVM_BUILD_LOG="${NVM_DIR}/.cache/thread-install.log"
+  command mkdir -p "${NVM_DIR}/.cache"
+
+  # Run one build stage in its own session and verify that make starts with
+  # the requested job count before aborting the build.
+  # $1: nvm install arguments (including the -j flag)
+  # $2: the make job count to look for
+  run_stage () {
+    stage_install_args="$1"
+    stage_jobs="$2"
+    # The version may still be active (like after 'install from source'), so remove
+    # it by path rather than through "nvm uninstall", which refuses active versions.
+    [ -e "${NVM_TEST_VERSION_PATH}" ] && rm -Rf "${NVM_TEST_VERSION_PATH}"
+    # nvm is a shell function, so the setsid'ed shell sources nvm.sh itself.
+    setsid sh -c ". \"${NVM_DIR}/nvm.sh\" >/dev/null; nvm install ${stage_install_args} \"${NVM_TEST_VERSION}\"" > "$NVM_BUILD_LOG" 2>&1 &
+    stage_pid=$!
+    stage_make_seen=0
+    i=0
+    # Downloading, extracting and configuring take a few minutes.
+    while [ "$i" -lt 330 ]; do
+      if ps -ef | command grep -F make | command grep -F -- "-j ${stage_jobs}" > /dev/null 2>&1; then
+        stage_make_seen=1
+        break
+      fi
+      kill -0 "$stage_pid" 2>/dev/null || break
+      sleep 2
+      i=$((i + 1))
+    done
+    # Abort the build (kill the whole process group; "setsid" made the build its own
+    # session and process group) and clean up.
+    kill -KILL "-$stage_pid" 2>/dev/null || true
+    # Make sure the group is actually dead before reaping, so that "wait" cannot
+    # block on a live build.
+    i=0
+    stage_state=''
+    while [ "$i" -lt 10 ]; do
+      stage_state="$(ps -o state= -p "$stage_pid" 2>/dev/null | command tr -d '[:space:]')"
+      if [ -z "$stage_state" ] || [ "$stage_state" = Z ]; then
+        break
+      fi
+      sleep 1
+      i=$((i + 1))
+    done
+    if [ -n "$stage_state" ] && [ "$stage_state" != Z ]; then
+      die "could not stop the build (pid ${stage_pid} is still ${stage_state})"
+    fi
+    wait "$stage_pid" 2>/dev/null || true
+    [ -e "${NVM_TEST_VERSION_PATH}" ] && rm -Rf "${NVM_TEST_VERSION_PATH}"
+    # The KILL above skips nvm's own cleanup, so remove the install lock it left behind.
+    command rm -rf "${NVM_DIR}/.cache/locks/${NVM_TEST_VERSION}"
+    if [ "$stage_make_seen" != 1 ]; then
+      command tail -10 "$NVM_BUILD_LOG"
+      die "the build did not reach make with '-j ${stage_jobs}' (nvm install ${stage_install_args})"
+    fi
+  }
+
+  # STAGE 1 #
+  run_stage '-s -j 1' 1
+
+  # STAGE 2 #
+  run_stage '-j 2 -s' 2
+fi

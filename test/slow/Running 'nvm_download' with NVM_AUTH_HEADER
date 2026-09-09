@@ -1,0 +1,53 @@
+#!/bin/sh
+
+# Tests nvm_download's NVM_AUTH_HEADER support against a local mock server
+# (test/mocks/mock-server.js) providing the endpoints a local httpbin
+# container used to provide. It is a slow test because running the mock
+# server requires a node binary, which the fast tests do not assume.
+cleanup () {
+  unset -f die cleanup
+  if [ -n "${mock_server_pid:-}" ]; then
+    kill "${mock_server_pid}" >/dev/null 2>&1 || true
+  fi
+  rm -f "${mock_server_port_file:-}" 2>/dev/null || true
+}
+die () { echo "$@" ; cleanup ; exit 1; }
+
+: nvm.sh
+\. ../../nvm.sh
+
+set -ex
+
+# nvm_download install.sh
+nvm_download "https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh" >/dev/null || die "nvm_download unable to download install.sh"
+
+# nvm_download should fail to download wrong_install.sh
+! nvm_download "https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/wrong_install.sh" >/dev/null || die "nvm_download should fail to download no existing file"
+
+# start the mock server (which provides the auth header endpoints) with
+# node, on an ephemeral port
+command -v node >/dev/null || die 'node is required to run the mock server'
+mock_server_port_file="$(mktemp)"
+node "../mocks/mock-server.js" "${mock_server_port_file}" >/dev/null 2>&1 &
+mock_server_pid="$!"
+mock_server_port=''
+i=0
+while [ "${i}" -lt 10 ]; do
+  if [ -s "${mock_server_port_file}" ]; then
+    mock_server_port="$(cat "${mock_server_port_file}")"
+    break
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+[ -n "${mock_server_port}" ] || die 'the mock server did not report a port'
+
+# nvm_download should pass when calling with auth header
+NVM_AUTH_HEADER="Bearer test-token" nvm_download "http://127.0.0.1:${mock_server_port}/bearer" > /dev/null || die 'nvm_download with auth header should send correctly'
+# nvm_download should fail when calling without auth header
+nvm_download "http://127.0.0.1:${mock_server_port}/bearer" > /dev/null && die 'nvm_download with no auth header should not send the header and should fail'
+
+# ensure quoted extra args remain quoted
+nvm_download "https://raw.githubusercontent.com/nvm-sh/nvm/HEAD/install.sh" -o "; die quoted-command-not-quoted" || die 'command failed'
+
+cleanup

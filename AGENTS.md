@@ -241,7 +241,7 @@ npm run markdown-link-check  # Validates markdown links (requires markdown-link-
 
 ## Docker Development Container
 
-A development container image (`nvm-dev`) packages the current `nvm` working copy into an Ubuntu-based environment prepared with the tools needed to develop and test `nvm`. It provides a clean shell environment with all supported shells (bash, zsh, dash, ksh) and a working pty. `tini` is the container's init process (PID 1), so signals are forwarded to the running command, orphaned processes are reaped, and scripts can use `exec`.
+A development container image (`nvm-dev`) packages the current `nvm` working copy into an Ubuntu-based environment prepared with the tools needed to develop and test `nvm`. It is the recommended environment for running the test suite: it provides a clean shell environment with all supported shells (bash, zsh, dash, ksh) and a working pty, and all test suites pass when run in it. `tini` is the container's init process (PID 1), so signals are forwarded to the running command, orphaned processes are reaped, and scripts can use `exec`.
 
 ### Building the container
 
@@ -258,6 +258,8 @@ Any arguments given to the script are passed through to `docker build`, so extra
 ```
 
 This builds the `nvm-dev` image with the current user's username, uid, and gid as the non-root user inside the container. Building with the host user's identity is important: it allows the host's `nvm` source directory to be mounted into the container and for files to be copied to and from it with matching ownership. The build takes several minutes and the image is not suitable for production usage.
+
+Note that the build copies the current working copy (including its `.git` directory) into the image and then points the git `origin` remote at the upstream `https://github.com/nvm-sh/nvm` repository (as the CI's checkout does): if the working copy's origin were left as an ssh fork, the tests that run `install.sh` (the `install_script` suite) would hang waiting for an ssh authentication or host-key prompt. The `test/fixtures/nvmrc` git submodule is also checked out at build time, pinned to the upstream `nvm-sh/nvmrc` repository.
 
 To build a container with the default `nvm` username, uid, and gid (1001) instead, run:
 
@@ -291,17 +293,23 @@ The `--rm` flag removes the container on exit and the `--name nvm-dev` flag mean
 
 ### Running the test suite
 
-Run the test suite inside the container (from `${HOME}/.nvm`):
+Run one test suite inside the container (from `${HOME}/.nvm`):
 
 ```bash
-npm run test
+npm run test/fast
 ```
 
-The `npm run test/*` scripts detect the shell to test in from their parent process, so the suite runs in the shell they are invoked from. The `run-tests-in-container.sh` script shipped in the repository runs the suite non-interactively from the host; see the comments in that script for example commands.
+Run all six test suites ("fast", "slow", "sourcing", "installation_node", "installation_iojs", and "install_script" — in that order, with "install_script" last because some of its tests update the packaged repository with git) with the `run-tests-in-container.sh` script shipped in the repository; see the comments in that script for example commands:
 
-Note that running the test suite typically removes the node installation, so if you need to rerun the tests, exit the container and then run the container again.
+```bash
+./run-dev-container.sh "/home/$(whoami)/.nvm/run-tests-in-container.sh"
+```
 
-If you capture the output of a container run to a log file, write the log to a dedicated directory under `${HOME}/.cache` (like `${HOME}/.cache/ai_agent_scratch_space`), not to `/tmp`, and mount that directory into the container at the same location so that logs can also be written from inside the container:
+The tests must run in clean shells with `NVM_DIR` set and the other `NVM_*` variables and `BASH_ENV` unset, mirroring the CI environment: the tests' `setup_dir` scripts run under `sh`, where nvm.sh's `NVM_DIR` auto-detection does not work (it relies on `BASH_SOURCE`), and the container sets `BASH_ENV` to load nvm into every bash shell, which both pollutes tests that inspect the shell's functions and variables and makes the tests' fake `node` wrapper scripts re-enter nvm through their `#!/bin/bash` shebangs, forking endlessly. Both `run-tests-in-container.sh` and the `make` test targets (used by `npm run test/*`) set up this environment: do not remove the `NVM_DIR` setup from `run-tests-in-container.sh` or the `BASH_ENV` unset from the `Makefile`. `test/fixtures` and `test/mocks` are not test suites ("test/mocks/pkg_info_fail" exits 1 by design), which is why `run-tests-in-container.sh` runs an explicit list of suites instead of the default.
+
+The tests download a lot of files, and an occasional download can hang: `run-tests-in-container.sh` therefore gives each suite a timeout (600 seconds by default, as in the CI; `SUITE_TIMEOUT` overrides all of them) and, if a suite times out, stops the whole suite (including the hung download, by killing the suite's process group) and retries the suite, up to 3 attempts. The `installation_node` suite gets a larger default timeout (4200 seconds): on modern systems it builds a modern node release from source, which takes much longer than the v0.10.7 build of the CI's Ubuntu 16.04 job (see below).
+
+When capturing the output of a container run to a log file, write the log to a dedicated directory under `${HOME}/.cache` (like `${HOME}/.cache/ai_agent_scratch_space`), not to `/tmp`, and mount that directory into the container at the same location so that logs can also be written from inside the container:
 
 ```bash
 mkdir -p "${HOME}/.cache/ai_agent_scratch_space"
@@ -314,6 +322,10 @@ docker run --rm --name nvm-dev \
 
 Delete such log files once they are no longer needed, so they do not fill the disk.
 
+The `installation_node` source tests build a node release from source, choosing the release from the toolchain available: with python 2 (the CI's Ubuntu 16.04 job) they build v0.10.7, whose configure requires it; without python 2 (a modern system, including this container) they build the current node release (v26.8.1), which builds with python 3 and a modern C/C++ toolchain. Building a modern node with 1-2 make jobs takes hours, so on modern systems the "thread parameter" test does not run its builds to completion: it starts each build in its own session (via `setsid`), verifies that make actually runs with the requested job count, and then kills the build's process group and removes the install lock that the kill leaves behind (it needs `setsid` and `ps` for this). The "V8 snapshot for ARM" test fakes an ARM architecture, for which nvm passes `--without-snapshot`; on modern node releases that flag is a no-op that prints a deprecation warning, and the test verifies that the flag was passed. The `installation_iojs` source tests still skip (exit 0) when the python 2 (and gcc ≤ 5) toolchain is missing: no modern io.js alternative exists.
+
+Note that running the test suite typically removes the node installation, so if you need to rerun the tests, exit the container and then run the container again.
+
 ### Running commands non-interactively
 
 Commands can be run in a non-interactive way by first writing them into a separate shell script file and then executing it inside the container. The image's entrypoint is `tini` and its default command (`CMD`) is an interactive bash, so a mounted script can be run through an interactive bash (which loads nvm and puts node/npm on the PATH). Example, from the host:
@@ -324,7 +336,11 @@ container_user="$(docker image inspect --format '{{.Config.User}}' nvm-dev)"
 docker run --rm --name nvm-dev -it --volume "/tmp/test.sh:/home/${container_user}/.nvm/test.sh" nvm-dev /bin/bash -i "/home/${container_user}/.nvm/test.sh"
 ```
 
-A script can also be executed directly as a container command; it then runs in the shell of its shebang line. A `#!/bin/bash` script loads nvm through `BASH_ENV`, but a `#!/bin/sh` (dash) script does not (dash ignores `BASH_ENV`), so such scripts must either source nvm themselves or run commands that do not need node.
+A script can also be executed directly as a container command; it then runs in the shell of its shebang line. A `#!/bin/bash` script loads nvm through `BASH_ENV`, but a `#!/bin/sh` (dash) script does not (dash ignores `BASH_ENV`), so such scripts must either source nvm themselves or run commands that do not need node. Note that the `npm run test/*` scripts detect the shell to test in from their parent process, so a script that runs `npm run test/*` should be run through the interactive bash above, or should run the tests explicitly (like `run-tests-in-container.sh` does), so that the intended test shell is used:
+
+```bash
+docker run --rm --name nvm-dev -it nvm-dev "/home/${container_user}/.nvm/run-tests-in-container.sh"
+```
 
 ## Shell Environment Setup
 

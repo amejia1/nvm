@@ -44,6 +44,7 @@
   - [Set default node version](#set-default-node-version)
   - [Use a mirror of node binaries](#use-a-mirror-of-node-binaries)
     - [Pass Authorization header to mirror](#pass-authorization-header-to-mirror)
+    - [Pass a Proxy-Authorization header to a proxy](#pass-a-proxy-authorization-header-to-a-proxy)
   - [Platforms without official binaries](#platforms-without-official-binaries)
   - [.nvmrc](#nvmrc)
   - [Deeper Shell Integration](#deeper-shell-integration)
@@ -658,6 +659,18 @@ To pass an Authorization header through to the mirror url, set `$NVM_AUTH_HEADER
 NVM_AUTH_HEADER="Bearer secret-token" nvm install node
 ```
 
+#### Pass a Proxy-Authorization header to a proxy
+To pass a Proxy-Authorization header through to a proxy that the downloads are
+routed through (for example via `http_proxy` or `https_proxy`), set
+`$NVM_PROXY_AUTH_HEADER`
+
+```sh
+export http_proxy="http://proxy.example.com:3128"
+export https_proxy="http://proxy.example.com:3128"
+export NVM_PROXY_AUTH_HEADER="Basic dXNlcjpwYXNzd29yZA=="
+nvm install node
+```
+
 ### Platforms without official binaries
 
 nodejs.org does not publish a binary for every platform and architecture nvm can detect. Where it does not, `nvm install` falls back by default to compiling from source, which is slow and needs a C++ toolchain (see [Important Notes](#important-notes)); set `$NVM_NO_SOURCE_FALLBACK` to `1` to make a missing binary an error instead.
@@ -1092,14 +1105,24 @@ Or you can run the `docker run` command directly.
 docker run --rm --name nvm-dev -it --volume "$(pwd):/home/$(whoami)/nvm:rw" nvm-dev
 ```
 
-Once inside the container, you can do things like run the test suite.
+Once inside the container, you can do things like run a test suite.
 
 ```sh
-npm run test
+npm run test/fast
 ```
 
-There is also a "run-tests-in-container.sh" script to run the test suite non-interactively from the host. See the comments
-in that script for example commands.
+There is also a "run-tests-in-container.sh" script to run all test suites non-interactively from within the container. See the comments in that
+script for example commands to use that script to run the tests. It runs the six real test suites ("fast", "slow", "sourcing",
+"installation_node", "installation_iojs", and "install_script" — in that order, with "install_script" last because some of its tests
+update the packaged repository with git) in bash; the "test/fixtures" and "test/mocks" directories are not test suites and are not ran.
+The tests download a lot of files, and an occasional download can hang, so each suite is given a timeout (600 seconds by default, as in
+the CI; the "installation_node" suite gets 4200 seconds on modern systems, and `SUITE_TIMEOUT` overrides them), and a timed-out suite is
+stopped (including the hung download) and retried, up to 3 attempts. The "installation_node" source tests build a node release from
+source, choosing it from the available toolchain: v0.10.7 (which requires python 2, as in the CI's Ubuntu 16.04 job) when python 2 is
+present, and the current node release (v26.8.1) otherwise; on modern systems, the "thread parameter" test verifies that the build starts
+with the requested make job count and then aborts it, since building a modern node with 1-2 make jobs takes hours. The "installation_iojs"
+source tests still skip (exit 0) when the python 2 (and gcc ≤ 5) toolchain is missing, while the binary-install and "fake source" tests
+cover nvm's source-install pipeline on every toolchain.
 
 Note that running the test suite will typically remove the node installation, so if you need to rerun the tests, simply exit the container and then run the container again.
 
@@ -1112,14 +1135,9 @@ container_user="$(docker image inspect --format '{{.Config.User}}' nvm-dev)"
 docker run --rm --name nvm-dev -it --volume "/tmp/test.sh:/home/${container_user}/.nvm/test.sh" nvm-dev /bin/bash -i "/home/${container_user}/.nvm/test.sh"
 ```
 
-The image uses tini as its init process, so a mounted script can also be executed directly as a container command. A script
-that is executed directly runs in the shell of its shebang line: a `#!/bin/bash` script loads nvm through `BASH_ENV`, while a
-`#!/bin/sh` (dash) script does not (dash ignores `BASH_ENV`), so such scripts must either source nvm themselves or run commands
-that do not need node.
+The image uses tini as its init process, so a mounted script can also be executed directly as a container command. A script that is executed directly runs in the shell of its shebang line: a `#!/bin/bash` script loads nvm through `BASH_ENV`, while a `#!/bin/sh` (dash) script does not (dash ignores `BASH_ENV`), so such scripts must either source nvm themselves or run commands that do not need node. Also note that commands like `npm run test/fast` detect the shell to test in from their parent process: for example, the `run-tests-in-container.sh` script mentioned above is a good fit to be executed directly, since it runs the test suites in bash explicitly.
 
-If you capture the output of a container run to a log file, write the log to a dedicated directory under `"$HOME/.cache"` (like
-`"$HOME/.cache/ai_agent_scratch_space"`), not to `/tmp`, and mount that directory into the container at the same location so that
-logs can also be written from inside the container. Delete such log files once they are no longer needed, so they do not fill the disk.
+If you capture the output of a container run to a log file, write the log to a dedicated directory under `"$HOME/.cache"` (like `"$HOME/.cache/ai_agent_scratch_space"`), not to `/tmp`, and mount that directory into the container at the same location so that logs can also be written from inside the container. Delete such log files once they are no longer needed, so they do not fill the disk.
 
 ```sh
 mkdir -p "$HOME/.cache/ai_agent_scratch_space"

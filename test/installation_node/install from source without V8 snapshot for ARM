@@ -4,22 +4,42 @@ die () { echo "$@" ; exit 1; }
 
 \. ../../nvm.sh
 
-NVM_TEST_VERSION=v0.10.7
+# CI (Ubuntu 16.04) builds v0.10.7, whose configure requires python 2. Modern
+# systems do not have python 2, so build the current node release instead, which
+# builds with python 3 and a modern C/C++ toolchain.
+if python -V 2>&1 | command grep -q '^Python 2'; then
+  NVM_TEST_VERSION=v0.10.7
+else
+  NVM_TEST_VERSION=v26.8.1
+fi
+
+# Versions below 0.12.0 are installed directly under NVM_DIR (like "v0.10.7"),
+# newer ones under "versions/node"; use nvm_version_path so both are handled.
+NVM_TEST_VERSION_PATH="$(nvm_version_path "${NVM_TEST_VERSION}")"
 
 # Remove the stuff we're clobbering.
-[ -e ../../$NVM_TEST_VERSION ] && rm -R ../../$NVM_TEST_VERSION
+[ -e "${NVM_TEST_VERSION_PATH}" ] && rm -Rf "${NVM_TEST_VERSION_PATH}"
 
 # Fake ARM arch
 nvm_get_arch() {
   echo "armv7l"
 }
 
+NVM_BUILD_LOG="${NVM_DIR}/.cache/arm-install.log"
+command mkdir -p "${NVM_DIR}/.cache"
+
 # Install from source
-nvm install -s $NVM_TEST_VERSION || die "'nvm install -s $NVM_TEST_VERSION' failed"
+nvm install -s $NVM_TEST_VERSION > "$NVM_BUILD_LOG" 2>&1 || { command tail -10 "$NVM_BUILD_LOG"; die "'nvm install -s ${NVM_TEST_VERSION}' failed"; }
+
+# On modern node releases --without-snapshot is a no-op that prints a
+# deprecation warning, so verify that nvm actually passed the flag for ARM.
+if [ "${NVM_TEST_VERSION}" != v0.10.7 ]; then
+  command grep -F "without-snapshot" "$NVM_BUILD_LOG" > /dev/null || die "configure was not run with --without-snapshot"
+fi
 
 # Check Install
-[ -d ../../$NVM_TEST_VERSION ]
-node --version | grep $NVM_TEST_VERSION || "'node --version | grep $NVM_TEST_VERSION' failed"
+[ -d "${NVM_TEST_VERSION_PATH}" ] || die "${NVM_TEST_VERSION_PATH} is not a directory"
+node --version | command grep $NVM_TEST_VERSION || "'node --version | grep ${NVM_TEST_VERSION}' failed"
 
 # Check V8 snapshot isn't compiled
-node -p "if(! process.config.variables.v8_use_snapshot) { console.log('no-snapshot'); }" | grep "no-snapshot" || "'node -p \"if(! process.config.variables.v8_use_snapshot) { console.log('no-snapshot'); }\" | grep \"no-snapshot\"' failed"
+node -p "if(! process.config.variables.v8_use_snapshot) { console.log('no-snapshot'); }" | command grep "no-snapshot" || "'node -p \"if(! process.config.variables.v8_use_snapshot) { console.log('no-snapshot'); }\" | grep \"no-snapshot\"' failed"
