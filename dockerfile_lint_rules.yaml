@@ -1,0 +1,17 @@
+# Rule file used by "npm run dockerfile_lint" (see the "dockerfile_lint" script in package.json).
+# It contains only the USER rule, relaxed so that the build ARG reference it uses in this
+# Dockerfile is accepted: the development container's user comes from a build ARG (the host
+# user's name), so USER references ${NON_ROOT_USER}. Every other directive (including
+# WORKDIR, whose base rule already accepts the ARG reference it uses) falls back to the
+# permissive base rules shipped with the dockerfile_lint package (which this file is merged
+# on top of).
+---
+  profile:
+    name: "nvm"
+    description: "Relaxed USER rule for the development container (whose user comes from a build ARG); all other directives use the package's permissive base rules."
+  line_rules:
+    # The development container's user comes from a build ARG (the host user's name),
+    # so an ARG reference (like ${NON_ROOT_USER}) must be accepted in addition to a literal name.
+    USER:
+      paramSyntaxRegex: /^[$a-zA-Z0-9_][$a-zA-Z0-9_{}-]{0,40}$/
+      rules: []
